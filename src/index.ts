@@ -5,8 +5,10 @@ export default {
 			return new Response('Method Not Allowed: Please use POST', {
 				status: 405,
 				headers: {
-					'Content-Type': 'application/json',
 					'Access-Control-Allow-Origin': '*',
+					'Access-Control-Allow-Methods': 'POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type',
+					'Access-Control-Max-Age': '86400', // 可选：缓存预检请求 24 小时
 				},
 			});
 		}
