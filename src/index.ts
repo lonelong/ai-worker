@@ -1,93 +1,154 @@
 export default {
-	async fetch(request: { method: string; json: () => any }, env: any, ctx: any) {
-		return new Response('Method Not Allowed: Please use POST', {
-				status: 405,
-				headers: {
-					'Access-Control-Allow-Origin': '*', // 或 '*'
-					'Access-Control-Allow-Methods': 'POST, OPTIONS',
-					'Access-Control-Allow-Headers': 'Content-Type',
-					'Access-Control-Max-Age': '86400', // 可选：缓存预检请求 24 小时
-				},
-			});
-		// 只处理 POST 请求，你可以根据需要修改
-		if (request.method !== 'POST') {
-			return new Response('Method Not Allowed: Please use POST', {
-				status: 405,
-				headers: {
-					'Access-Control-Allow-Origin': '*',
-					'Access-Control-Allow-Methods': 'POST, OPTIONS',
-					'Access-Control-Allow-Headers': 'Content-Type',
-					'Access-Control-Max-Age': '86400', // 可选：缓存预检请求 24 小时
-				},
-			});
+	async fetch(request, env, ctx) {
+		// 处理 CORS 预检请求
+		if (request.method === 'OPTIONS') {
+			return handleCORS();
 		}
 
-		try {
-			// 1. 读取请求体（比如前端传来的 prompt）
-			const requestBody = await request.json();
-			const userPrompt = requestBody.prompt; // 假设前端传了 { prompt: "你好" }
+		const url = new URL(request.url);
 
-			if (!userPrompt) {
-				return new Response(JSON.stringify({ error: 'Missing prompt' }), {
-					status: 400,
-					headers: {
-						'Content-Type': 'application/json',
-						'Access-Control-Allow-Origin': '*',
-					},
-				});
-			}
+		// API 路由
+		if (url.pathname === '/api/chat' && request.method === 'POST') {
+			return await handleChatRequest(request, env);
+		}
 
-			// 2. 调用 OpenAI API
-			const openaiApiKey = `sk-f11b2c3813bf4e168c21a5cd6289eb27`; // ⚠️ 请替换成你自己的 API Key
-			const openaiApiUrl = 'https://api.deepseek.com/v1/chat/completions';
-
-			const response = await fetch(openaiApiUrl, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${openaiApiKey}`,
-				},
-				body: JSON.stringify({
-					model: 'deepseek-chat',
-					temperature: requestBody.temperature || 0.7,
-					stream: requestBody.stream || false,
-					messages: [
-						{ role: 'system', content: '你是一个有帮助的 AI 助手。' },
-						{ role: 'user', content: userPrompt },
-					],
-					max_tokens: 1000,
-				}),
-			});
-
-			console.log('[OpenAI Response Status]', response.status);
-			const data = await response.json();
-			console.log('[OpenAI Response Body]', data);
-
-			// 3. 将 OpenAI 的响应返回给客户端
-			if (!response.ok) {
-				// OpenAI 返回了错误，比如无效 key、超出限额等
-				return new Response(
-					JSON.stringify({
-						error: 'OpenAI API Error',
-						details: data,
-					}),
-					{
-						status: response.status,
-						headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-					}
-				);
-			}
-
-			return new Response(JSON.stringify(data), {
+		// 健康检查端点
+		if (url.pathname === '/health') {
+			return new Response('OK', {
 				status: 200,
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-			});
-		} catch (error: any) {
-			console.error('Worker Error:', error);
-			return new Response(JSON.stringify({ error: 'Internal Server Error', details: error.message }), {
-				status: 500,
-				headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+				headers: getCORSHeaders(),
 			});
 		}
+
+		return new Response('Not Found', {
+			status: 404,
+			headers: getCORSHeaders(),
+		});
 	},
 };
+
+// 处理聊天请求
+async function handleChatRequest(request, env) {
+	try {
+		const { message, history } = await request.json();
+
+		if (!message) {
+			return new Response(JSON.stringify({ error: '消息不能为空' }), {
+				status: 400,
+				headers: {
+					'Content-Type': 'application/json',
+					...getCORSHeaders(),
+				},
+			});
+		}
+
+		// 调用 DeepSeek API
+		const response = await callDeepSeekAPI(message, history, env);
+
+		return new Response(JSON.stringify({ response }), {
+			status: 200,
+			headers: {
+				'Content-Type': 'application/json',
+				...getCORSHeaders(),
+			},
+		});
+	} catch (error) {
+		console.error('Chat request error:', error);
+		return new Response(
+			JSON.stringify({
+				error: '处理请求时出现错误',
+				details: error.message,
+			}),
+			{
+				status: 500,
+				headers: {
+					'Content-Type': 'application/json',
+					...getCORSHeaders(),
+				},
+			}
+		);
+	}
+}
+
+// 调用 DeepSeek API
+async function callDeepSeekAPI(message, history = [], env) {
+	const DEEPSEEK_API_KEY = env.DEEPSEEK_API_KEY;
+
+	if (!DEEPSEEK_API_KEY) {
+		throw new Error('DeepSeek API key 未配置');
+	}
+
+	// 构建消息历史
+	const messages = [];
+
+	// 添加系统提示
+	messages.push({
+		role: 'system',
+		content: '你是一个友善、有帮助的AI助手。请用中文回复，提供准确、有用的信息。',
+	});
+
+	// 添加历史消息（最多10条）
+	const recentHistory = history.slice(-10);
+	for (const msg of recentHistory) {
+		messages.push({
+			role: msg.type === 'user' ? 'user' : 'assistant',
+			content: msg.content,
+		});
+	}
+
+	// 添加当前消息
+	messages.push({
+		role: 'user',
+		content: message,
+	});
+	try {
+		const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				model: 'deepseek-chat',
+				messages: messages,
+				temperature: 0.7,
+				max_tokens: 2000,
+				stream: false,
+			}),
+		});
+
+		if (!response.ok) {
+			const errorText = await response.text();
+			throw new Error(`DeepSeek API 错误: ${response.status} - ${errorText}`);
+		}
+
+		const data = await response.json();
+
+		if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+			throw new Error('DeepSeek API 返回格式错误');
+		}
+
+		return data.choices[0].message.content;
+	} catch (error) {
+		console.error('DeepSeek API call failed:', error);
+		throw new Error(`调用 DeepSeek API 失败: ${error.message}`);
+	}
+}
+
+// 处理 CORS
+function handleCORS() {
+	return new Response(null, {
+		status: 204,
+		headers: getCORSHeaders(),
+	});
+}
+
+// 获取 CORS 头
+function getCORSHeaders() {
+	return {
+		'Access-Control-Allow-Origin': '*',
+		'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+		'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+		'Access-Control-Max-Age': '86400',
+	};
+}
