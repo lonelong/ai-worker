@@ -1,5 +1,14 @@
 export default {
 	async fetch(request: { method: string; json: () => any }, env: any, ctx: any) {
+		return new Response('Method Not Allowed: Please use POST', {
+				status: 405,
+				headers: {
+					'Access-Control-Allow-Origin': '*', // 或 '*'
+					'Access-Control-Allow-Methods': 'POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type',
+					'Access-Control-Max-Age': '86400', // 可选：缓存预检请求 24 小时
+				},
+			});
 		// 只处理 POST 请求，你可以根据需要修改
 		if (request.method !== 'POST') {
 			return new Response('Method Not Allowed: Please use POST', {
